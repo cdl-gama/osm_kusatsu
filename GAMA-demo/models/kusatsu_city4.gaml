@@ -32,7 +32,7 @@ global {
 	
 	geometry shape <- envelope(shape_file_roads);
 
-	int nb_people <- 1500;
+	int nb_people <- 1000;
 	int nb_bus <- 30;
 	int time_to_set_offset <- 1;
 	
@@ -174,7 +174,11 @@ global {
 		}
 		
 		create node_agt from: shape_file_nodes with:[is_traffic_signal::(string(read("highway")) = "traffic_signals"),highway::(string(read("highway"))),end::(string(read("end")))]{
-		
+			
+			split <- sig_split;
+			
+			
+			
 		}
 		starting_point <- one_of(node_agt where each.is_traffic_signal);
 		
@@ -186,6 +190,20 @@ global {
 		pana_west_route <- road as_map(each::(each.pana_west));
 			
 		road_network <-  as_driving_graph(road, node_agt)with_weights general_speed_map;
+		
+		
+		container data <- ["road_id","source_node","target_node"];
+		save data to: "graph.csv" type: "csv" rewrite: false;
+		
+		loop i from: 0 to: length(road)-1{
+			data <-  [i,int(road[i].source_node),int(road[i].target_node)];
+			save data to: "graph.csv" type: "csv" rewrite: false;
+		}
+		
+		
+		
+		
+		
 				
 		bus_stop1 <- one_of(node_agt where (each.highway = "bus_terminal1"));//立命館大学1
 		bus_stop2 <- one_of(node_agt where (each.highway = "bus_terminal2"));//立命館大学2
@@ -298,7 +316,7 @@ global {
 			
 		}
 		
-		//create dice;
+		create dice;
 		
     }		
 }
@@ -319,16 +337,16 @@ species node_agt skills: [skill_road_node] {
 	string highway;
 	string end;
 	int cycle <- 100; 
-	float split <- rnd(1.0,0.1); 
+	float split ; 
 	int counter;
 	int offset <- 0;
 	bool is_blue <- true;
 	list<road> current_shows ; 
 	list<node_agt> adjoin_node;
 	string mode <- "independence";
-	int phase_time <- int(cycle*split);
 	agent c1; 
 	agent c2; 
+	int trf_vol;
 	
 	
 
@@ -401,21 +419,17 @@ species node_agt skills: [skill_road_node] {
 			
 			if (length(roads_in) = 4) {
 				if(is_blue){		
-					current_shows <- [road(roads_in[0]),road(roads_in[2])];	
-					phase_time <- int(cycle*split);			
+					current_shows <- [road(roads_in[0]),road(roads_in[2])];				
 				}else{
 					current_shows <- [road(roads_in[1]),road(roads_in[3])]; 
-					phase_time <- int(cycle*(1-split));	
 				}
 			}
 			
 			if (length(roads_in) = 3) {		
 				if(is_blue){
-					current_shows <- [road(roads_in[0])];	
-				 	phase_time <- int(cycle*split) ;			
+					current_shows <- [road(roads_in[0])];				
 				}else{
 					current_shows <- [road(roads_in[1]),road(roads_in[2])]; 
-					phase_time <- int(cycle*(1-split));	
 				}
 			}
 			
@@ -582,18 +596,15 @@ species car skills: [advanced_driving] {
 	point mem_return_current_target;
 	agent mem_return_current_road;
 	list<point> mem_return_targets;
-	
-	int dead_count;
-	int waiting_time;
-	point temp_location;
+	point temp_current_target <- current_target;
 
 	
-//	reflex set_arrivaltime when: current_road != temp {
-//		travel_time <- time - departure_time;
-//		departure_time <- time;
-//		previous_road <- temp;
-//		temp <- current_road;			
-//	}
+	reflex set_arrivaltime when: current_road != temp {
+		travel_time <- time - departure_time;
+		departure_time <- time;
+		previous_road <- temp;
+		temp <- current_road;			
+	}
 	
 	
 //	reflex aaa when: segment_index_on_road = -1{
@@ -605,10 +616,7 @@ species car skills: [advanced_driving] {
 	
 
 
-	reflex time_to_home when:self.location = final_target{
-		temp_location <- self.location;
-		self.location <- any_location_in(home);
-	}
+
 	
 
 		
@@ -633,7 +641,7 @@ species car skills: [advanced_driving] {
 		destination <- nil;
 		distance_to_goal <- nil;
 		location <- nil;
-		dead_count <- 0;
+	
 		
 		
 		current_index <- 0;
@@ -675,7 +683,7 @@ species car skills: [advanced_driving] {
 		destination <- nil;
 		location <- nil;
 		distance_to_goal <- nil;
-		dead_count <- 0;
+		
 	
 	
 		
@@ -721,6 +729,17 @@ species car skills: [advanced_driving] {
 	
 	reflex move when: current_path != nil and final_target != nil and checked = false{
 		do drive;
+	}
+	
+	
+	reflex to_node when: temp_current_target != current_target{
+				
+		if(length(node_agt(road(previous_road).target_node).roads_in) > 2 or length(node_agt(road(previous_road).target_node).roads_out) > 2){
+		node_agt(road(previous_road).target_node).trf_vol <- node_agt(road(previous_road).target_node).trf_vol + 1;
+		}
+		
+		temp_current_target <- current_target;
+		
 	}
 	
 	aspect car3D {
@@ -840,39 +859,61 @@ species dice {
 	float ave_ave_traveltime; 
 	float count <- 0.0;
 	
-	reflex throw_the_dice when: current_hour = time_to_thorw+1{
-		
-		
 	
-		
-		loop i from: 0 to: nb_people*0.1-1{ 
-			agent_num <- rnd(nb_people-1);
-		ask car[agent_num]{
-				self.route_changed <- true;
-				write(self);
-			}	
-		}
-		
+	
 
-		loop i from: 0 to: length(road)-1{ 
-			if(road[i].flow != 0){
-			road[i].ave_traveltime <- road[i].sum_traveltime / road[i].flow;
+	reflex save_trf_vol when: time = 7200{
+	
+	
+		container data <- ["node_id","trf_vol"];
+		save data to: "graph.csv" type: "csv" rewrite: false;
+		
+		loop i from: 0 to: length(node_agt)-1{
+			
+			if(length(node_agt[i].roads_in) > 2 or length(node_agt[i].roads_out) > 2){
+			data <-  [i,node_agt[i].trf_vol];
+			save data to: "trf_vol.csv" type: "csv" rewrite: false;
 			}
-			if(road[i].highway = "trunk" or road[i].highway = "primary"){
-			ave_ave_traveltime <- ave_ave_traveltime + road[i].ave_traveltime;
-			count <- count + 1.0;
-			}
-			road[i].sum_traveltime <- 1.0;
-			road[i].flow <- 1;
 		}
-		
-		ave_ave_traveltime <- ave_ave_traveltime / count;
-		setnum <- {length(car),ave_ave_traveltime};
-		
-		general_cost_map <- road as_map (each::(each.ave_traveltime));	
-		
-		time_to_thorw <- time_to_thorw + 3600;	
+	
+	
 	}
+
+
+	
+//	reflex throw_the_dice when: current_hour = time_to_thorw+1{
+//		
+//		
+//	
+//		
+//		loop i from: 0 to: nb_people*0.1-1{ 
+//			agent_num <- rnd(nb_people-1);
+//		ask car[agent_num]{
+//				self.route_changed <- true;
+//				write(self);
+//			}	
+//		}
+//		
+//
+//		loop i from: 0 to: length(road)-1{ 
+//			if(road[i].flow != 0){
+//			road[i].ave_traveltime <- road[i].sum_traveltime / road[i].flow;
+//			}
+//			if(road[i].highway = "trunk" or road[i].highway = "primary"){
+//			ave_ave_traveltime <- ave_ave_traveltime + road[i].ave_traveltime;
+//			count <- count + 1.0;
+//			}
+//			road[i].sum_traveltime <- 1.0;
+//			road[i].flow <- 1;
+//		}
+//		
+//		ave_ave_traveltime <- ave_ave_traveltime / count;
+//		setnum <- {length(car),ave_ave_traveltime};
+//		
+//		general_cost_map <- road as_map (each::(each.ave_traveltime));	
+//		
+//		time_to_thorw <- time_to_thorw + 3600;	
+//	}
 	
 	
 }
